@@ -7,6 +7,7 @@ namespace SecondChance
     {
         const int W=35,H=43;
         readonly bool[] open=new bool[W*H];
+        public bool Built { get; private set; }
         static Vector3 Point(int i)=>new Vector3(i%W-17,.06f,i/W-21);
         static int Index(Vector3 p)=>Mathf.Clamp(Mathf.RoundToInt(p.z)+21,0,H-1)*W+Mathf.Clamp(Mathf.RoundToInt(p.x)+17,0,W-1);
         public void Build(Transform geometry)
@@ -18,6 +19,7 @@ namespace SecondChance
                 foreach(var c in Physics.OverlapBox(Point(i)+Vector3.up*.9f,new Vector3(.43f,.82f,.43f),Quaternion.identity,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore))
                     if(c.transform.IsChildOf(geometry)){open[i]=false;break;}
             }
+            Built=true;
         }
         public bool IsWalkable(Vector3 p)=>open[Index(p)];
         public Vector3 Snap(Vector3 p)

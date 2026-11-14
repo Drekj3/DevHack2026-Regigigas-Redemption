@@ -10,8 +10,9 @@ namespace SecondChance
     [Serializable] public struct ActorSnapshot
     {
         public Vector3 position;
-        public float yaw, pitch, health, verticalSpeed, shotCooldown, reload;
+        public float yaw, pitch, health, verticalSpeed, shotCooldown, reload, bloom;
         public int ammo;
+        public bool crouched;
     }
     [Serializable] public class PracticeSnapshot
     {
@@ -78,9 +79,10 @@ namespace SecondChance
         readonly List<GameObject> effects=new List<GameObject>();
         string outcome="",previous="",notice="Choose placement, then click the courtyard.";
         string savePath => Path.Combine(Application.persistentDataPath,"second-chance-scenario.json");
+        Transform geometry;
         void Awake()
         {
-            var geometry = PracticeWorld.Build(transform);
+            geometry = PracticeWorld.Build(transform);
             navigation.Build(geometry);
             playerRoot=new GameObject("Player").transform; playerRoot.SetParent(transform);
             pc=playerRoot.gameObject.AddComponent<CharacterController>(); pc.height=1.8f;pc.radius=.3f;pc.center=Vector3.up*.9f;
@@ -107,12 +109,23 @@ namespace SecondChance
             overhead.transform.position=new Vector3(0,50,0);overhead.transform.rotation=Quaternion.Euler(90,0,0);overhead.orthographic=true;overhead.orthographicSize=27;
             overhead.clearFlags=CameraClearFlags.SolidColor;overhead.backgroundColor=new Color(.07f,.11f,.14f);
             sound=gameObject.AddComponent<AudioSource>();sound.playOnAwake=false;sound.volume=.15f;
-            shotSound=AudioClip.Create("Synthetic practice rifle",4410,1,44100,false);
-            var samples=new float[4410]; var random=new System.Random(8);
-            for(int i=0;i<samples.Length;i++) samples[i]=(float)(random.NextDouble()*2-1)*Mathf.Exp(-i/500f)*.6f;
-            shotSound.SetData(samples,0);
+            shotSound=MakeShotSound();
             tracerMaterial=new Material(Shader.Find("Universal Render Pipeline/Unlit"));tracerMaterial.color=new Color(1,.75f,.3f);
             ResetActors();ShowSetup();
+        }
+        static AudioClip MakeShotSound()
+        {
+            var clip=AudioClip.Create("Synthetic practice rifle",4410,1,44100,false);
+            var samples=new float[4410]; var random=new System.Random(8);
+            for(int i=0;i<samples.Length;i++) samples[i]=(float)(random.NextDouble()*2-1)*Mathf.Exp(-i/500f)*.6f;
+            clip.SetData(samples,0);return clip;
+        }
+        // A script recompile during Play mode wipes the nav grid and generated clip,
+        // which froze the bot. OnEnable runs after that reload, so rebuild them here.
+        void OnEnable()
+        {
+            if(geometry!=null&&!navigation.Built){navigation.Build(geometry);route.Clear();}
+            if(sound!=null&&shotSound==null)shotSound=MakeShotSound();
         }
         ActorSnapshot Fresh(Vector3 pos,float yaw) => new ActorSnapshot{position=pos,yaw=yaw,health=scenario.startingHealth,ammo=25};
         void ResetActors()
@@ -173,8 +186,16 @@ namespace SecondChance
             playerRoot.rotation=Quaternion.Euler(0,p.yaw,0);fps.transform.localRotation=Quaternion.Euler(p.pitch,0,0);
             float x=(k.dKey.isPressed?1:0)-(k.aKey.isPressed?1:0),z=(k.wKey.isPressed?1:0)-(k.sKey.isPressed?1:0);
             Vector3 move=Vector3.ClampMagnitude(playerRoot.right*x+playerRoot.forward*z,1);
-            if(pc.isGrounded&&p.verticalSpeed<0)p.verticalSpeed=-2;p.verticalSpeed-=20*dt;
-            pc.Move((move*(k.leftShiftKey.isPressed?2.3f:4.5f)+Vector3.up*p.verticalSpeed)*dt);p.position=playerRoot.position;
+            // Crouch while held; only stand up if nothing is overhead.
+            bool wantCrouch=k.leftCtrlKey.isPressed||k.cKey.isPressed;
+            if(wantCrouch!=p.crouched&&(wantCrouch||!Physics.Raycast(playerRoot.position+Vector3.up*1.25f,Vector3.up,.6f,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore)))
+            {p.crouched=wantCrouch;SetCrouch();}
+            var cam=fps.transform.localPosition;cam.y=Mathf.MoveTowards(cam.y,p.crouched?1.05f:1.62f,dt*5);fps.transform.localPosition=cam;
+            if(pc.isGrounded&&p.verticalSpeed<0)p.verticalSpeed=-2;
+            if(pc.isGrounded&&k.spaceKey.wasPressedThisFrame)p.verticalSpeed=6.3f;
+            p.verticalSpeed-=20*dt;
+            pc.Move((move*(p.crouched?2f:k.leftShiftKey.isPressed?2.3f:4.5f)+Vector3.up*p.verticalSpeed)*dt);p.position=playerRoot.position;
+            p.bloom=Mathf.MoveTowards(p.bloom,0,dt*5);
             if(k.rKey.wasPressedThisFrame&&p.ammo<25&&p.reload<=0)p.reload=1.5f;
             if(m.leftButton.isPressed&&p.shotCooldown<=0&&p.reload<=0&&p.ammo>0)
             {
@@ -182,7 +203,9 @@ namespace SecondChance
                 // Gunfire provides an audible position, not permanent wall vision.
                 if(Vector3.Distance(p.position,b.position)<22f)
                 { lastKnown=p.position;memory=5f; }
-                Vector3 start=fps.transform.position,dir=fps.transform.forward;
+                Vector2 c=UnityEngine.Random.insideUnitCircle*PlayerSpread();
+                p.bloom=Mathf.Min(p.bloom+.45f,3.5f);
+                Vector3 start=fps.transform.position,dir=fps.transform.rotation*Quaternion.Euler(-c.y,c.x,0)*Vector3.forward;
                 Vector3 end=start+dir*80;
                 if(Physics.Raycast(start,dir,out RaycastHit hit,80,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore))
                 {
@@ -193,6 +216,15 @@ namespace SecondChance
                 Trace(rifle.TransformPoint(new Vector3(0,.025f,.82f)),end);
             }
         }
+        // Spread cone in degrees: firing builds bloom, moving adds a little (walking) or a lot (running),
+        // airborne is very inaccurate, crouching tightens.
+        float PlayerSpread()
+        {
+            Vector3 v=pc.velocity;v.y=0;float s=v.magnitude;
+            float move=Mathf.Min(s,2.4f)*.15f+Mathf.InverseLerp(2.4f,4.5f,s)*2.5f;
+            return (.1f+p.bloom+move)*(p.crouched?.55f:1)+(pc.isGrounded?0:6f);
+        }
+        void SetCrouch(){pc.height=p.crouched?1.2f:1.8f;pc.center=Vector3.up*pc.height/2;}
         void PoseGun()
         {
             kick=Mathf.MoveTowards(kick,0,Time.deltaTime*.3f);
@@ -273,7 +305,7 @@ namespace SecondChance
                     }
                 }
                 AimOpponent(p.position,320,dt);
-                if(reaction>=scenario.reactionSeconds)FireOpponent(p.position+Vector3.up*1.15f);
+                if(reaction>=scenario.reactionSeconds)FireOpponent(p.position+Vector3.up*(p.crouched?.8f:1.15f));
             }
             else
             {
@@ -345,6 +377,7 @@ namespace SecondChance
         }
         void ApplyTransforms()
         {
+            SetCrouch();fps.transform.localPosition=Vector3.up*(p.crouched?1.05f:1.62f);
             pc.enabled=false;bc.enabled=false;playerRoot.SetPositionAndRotation(p.position,Quaternion.Euler(0,p.yaw,0));botRoot.SetPositionAndRotation(b.position,Quaternion.Euler(0,b.yaw,0));pc.enabled=true;bc.enabled=true;
             fps.transform.localRotation=Quaternion.Euler(p.pitch,0,0);Physics.SyncTransforms();
         }
@@ -410,12 +443,14 @@ namespace SecondChance
             TacticalUI.Label(1295,794,"SENTINEL  /  RIFLE");
             TacticalUI.Text(new Rect(1295,817,260,45),p.reload>0?"RELOADING":p.ammo.ToString("00")+"  /  25",p.reload>0?22:36,null,true);
             if(p.reload>0)TacticalUI.Bar(new Rect(1295,863,260,3),1-p.reload/1.5f,TacticalUI.Coral);
-            TacticalUI.Text(new Rect(440,850,720,25),"WASD  MOVE     SHIFT  WALK     R  RELOAD     ESC  PAUSE",12,TacticalUI.Muted,false,TextAnchor.MiddleCenter);
+            TacticalUI.Text(new Rect(440,850,720,25),"WASD  MOVE     SPACE  JUMP     CTRL  CROUCH     SHIFT  WALK     R  RELOAD     ESC  PAUSE",12,TacticalUI.Muted,false,TextAnchor.MiddleCenter);
             if(Mode==PracticeMode.Live&&!paused)
             {
                 Color c=hitFlash>0?TacticalUI.Coral:TacticalUI.Mint;
-                TacticalUI.Fill(new Rect(788,449,7,2),c);TacticalUI.Fill(new Rect(805,449,7,2),c);
-                TacticalUI.Fill(new Rect(799,438,2,7),c);TacticalUI.Fill(new Rect(799,455,2,7),c);
+                // Crosshair gap tracks the real spread cone (~9.7 virtual px per degree at 78° FOV).
+                float g=5+PlayerSpread()*9.7f;
+                TacticalUI.Fill(new Rect(793-g,449,7,2),c);TacticalUI.Fill(new Rect(800+g,449,7,2),c);
+                TacticalUI.Fill(new Rect(799,443-g,2,7),c);TacticalUI.Fill(new Rect(799,450+g,2,7),c);
                 if(damageFlash>0){TacticalUI.Fill(new Rect(0,0,1600,10),TacticalUI.Coral);TacticalUI.Fill(new Rect(0,890,1600,10),TacticalUI.Coral);}
                 return;
             }
