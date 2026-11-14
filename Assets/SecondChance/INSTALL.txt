@@ -1,0 +1,7 @@
+COMPLETE REPLACEMENT
+
+Stop Play mode and close Unity. Move the old Assets/SecondChance folder outside your project as a backup. Unzip this archive and put the new SecondChance folder inside your project Assets folder. Reopen Unity and wait for compilation. Choose Second Chance > Create Practice Scene from the top menu, then press Play. The map generates at runtime.
+
+Create a fresh scene: this package does not preserve the old generated scene or its component assignments. Reassign an external bot adapter if needed. Saved scenario JSON in Application.persistentDataPath is unaffected. Your other project folders remain unchanged.
+
+Includes the full v2 runtime, navigation, world builder and scene installer. Unity Editor execution has not been verified in the authoring environment.
