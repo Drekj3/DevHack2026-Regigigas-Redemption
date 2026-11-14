@@ -1,0 +1,16 @@
+SECOND CHANCE — UI EDITION / COMPLETE REPLACEMENT
+
+1. Stop Play mode and close Unity.
+2. Move the previous Assets/SecondChance folder outside your project as a backup.
+3. Unzip this archive. Put its SecondChance folder inside your project Assets folder.
+4. Reopen Unity and wait for compilation.
+5. Choose Second Chance > Create Practice Scene from the top menu.
+6. Press Play. The environment and interface build automatically.
+
+Includes the full v2 gameplay, navigation, map and rifle plus the new tactical interface. No merging, UI assets, fonts or extra packages are required. Keep your original Unity project's URP and Input System packages. Reassign an external bot adapter if used.
+
+UI changes: dark navy panels, coral primary actions, mint status accents, deployment selectors, facing markers, custom sliders, health/ammo HUD, results cards, bottom replay controls. Designed at 1600x900 and scaled to the Game view. A 16:9 Game view is recommended.
+
+Controls: WASD movement; mouse aim; left click shoot; R reload; Shift walk; Escape pause. Choose placement in setup and click clear ground. Use results > review > timeline > take control to retry from an earlier state. Save/load uses the same local scenario JSON path as the previous version.
+
+This is an original tactical interface inspired by the requested visual direction; no Riot UI assets are included. Source structure and archive integrity checked. Unity compilation, rendering and interaction require testing in your Editor; Unity is unavailable in the authoring environment.

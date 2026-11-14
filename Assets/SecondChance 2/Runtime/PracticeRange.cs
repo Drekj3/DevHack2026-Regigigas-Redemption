@@ -77,7 +77,6 @@ namespace SecondChance
         readonly List<PracticeSnapshot> review=new List<PracticeSnapshot>();
         readonly List<GameObject> effects=new List<GameObject>();
         string outcome="",previous="",notice="Choose placement, then click the courtyard.";
-        GUIStyle heading,small,big;
         string savePath => Path.Combine(Application.persistentDataPath,"second-chance-scenario.json");
         void Awake()
         {
@@ -365,7 +364,8 @@ namespace SecondChance
         void Placement()
         {
             if(Mouse.current==null||!Mouse.current.leftButton.wasPressedThisFrame)return;
-            Vector2 mouse=Mouse.current.position.ReadValue();if(mouse.x<Screen.width*390f/1600f)return;
+            Vector2 mouse=Mouse.current.position.ReadValue();Vector2 ui=new Vector2(mouse.x*1600f/Screen.width,(Screen.height-mouse.y)*900f/Screen.height);
+            if(ui.x<425||ui.y<80||new Rect(455,100,410,64).Contains(ui))return;
             Ray ray=overhead.ScreenPointToRay(mouse);
             if(!Physics.Raycast(ray,out RaycastHit h,100,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore))return;
             if(h.normal.y<.9f||h.point.y>.15f){notice="Choose clear paving, not a roof or cover.";return;}
@@ -385,84 +385,131 @@ namespace SecondChance
         void OnGUI()
         {
             if(fps==null)return;
+            Matrix4x4 oldMatrix=GUI.matrix;
             GUI.matrix=Matrix4x4.TRS(Vector3.zero,Quaternion.identity,new Vector3(Screen.width/1600f,Screen.height/900f,1));
-            if(heading==null){heading=new GUIStyle(GUI.skin.label){fontSize=25,fontStyle=FontStyle.Bold};small=new GUIStyle(GUI.skin.label){fontSize=15,wordWrap=true};big=new GUIStyle(GUI.skin.label){fontSize=38,fontStyle=FontStyle.Bold};}
-            GUI.backgroundColor=new Color(.08f,.15f,.19f,.96f);
+            try { DrawInterface(); } finally { GUI.matrix=oldMatrix;GUI.color=Color.white; }
+        }
+        void DrawInterface()
+        {
             if(Mode==PracticeMode.Setup){SetupGUI();return;}
-            GUI.Label(new Rect(28,18,400,35),"SECOND CHANCE",heading);
-            GUI.Label(new Rect(28,53,500,30),"PIAZZA  /  TACTICAL SCENARIO PRACTICE",small);
-            GUI.Box(new Rect(530,15,540,45),"");GUI.Label(new Rect(548,23,520,30),Mode+"  /  "+elapsed.ToString("0.0")+"s  /  "+Style,small);
-            GUI.Box(new Rect(25,795,310,75),"");GUI.Label(new Rect(45,805,270,50),p.health.ToString("0")+"  HEALTH",big);
-            GUI.Box(new Rect(1270,795,305,75),"");GUI.Label(new Rect(1290,805,280,50),p.reload>0?"RELOADING":p.ammo+" / 25",big);
-            GUI.Label(new Rect(28,100,700,30),"OPPONENT: "+Decision,small);
+            TacticalUI.Fill(new Rect(0,0,1600,85),new Color(.035f,.065f,.09f,.86f));
+            TacticalUI.Fill(new Rect(25,25,4,35),TacticalUI.Coral);
+            TacticalUI.Text(new Rect(42,17,340,33),"SECOND CHANCE",23,null,true);
+            TacticalUI.Text(new Rect(43,49,350,20),"PIAZZA  /  PRACTICE PROTOCOL",11,TacticalUI.Muted,true);
+            TacticalUI.Text(new Rect(650,12,300,25),Mode==PracticeMode.Live?"LIVE ATTEMPT":Mode==PracticeMode.Review?"REPLAY REVIEW":"ROUND COMPLETE",12,TacticalUI.Mint,true,TextAnchor.MiddleCenter);
+            TacticalUI.Text(new Rect(650,34,300,43),elapsed.ToString("00.0"),32,null,true,TextAnchor.MiddleCenter);
+            TacticalUI.Text(new Rect(1250,20,320,27),Style.ToString().ToUpper()+" OPPONENT",14,null,true,TextAnchor.MiddleRight);
+            TacticalUI.Text(new Rect(1250,48,320,22),"1 VS 1  /  TRAINING",11,TacticalUI.Muted,false,TextAnchor.MiddleRight);
+            TacticalUI.Card(new Rect(25,105,390,67));
+            TacticalUI.Label(40,113,"OPPONENT INTENT");TacticalUI.Text(new Rect(40,137,360,27),Decision,13);
+            TacticalUI.Fill(new Rect(25,785,300,90),new Color(.035f,.065f,.09f,.85f));
+            TacticalUI.Text(new Rect(45,791,100,62),p.health.ToString("0"),47,null,true);
+            TacticalUI.Label(145,802,"HEALTH");TacticalUI.Text(new Rect(145,825,160,26),"READY FOR CONTACT",10,TacticalUI.Muted);
+            TacticalUI.Bar(new Rect(45,861,260,4),p.health/Mathf.Max(1,scenario.startingHealth),p.health<35?TacticalUI.Coral:TacticalUI.Mint);
+            TacticalUI.Fill(new Rect(1275,785,300,90),new Color(.035f,.065f,.09f,.85f));
+            TacticalUI.Label(1295,794,"SENTINEL  /  RIFLE");
+            TacticalUI.Text(new Rect(1295,817,260,45),p.reload>0?"RELOADING":p.ammo.ToString("00")+"  /  25",p.reload>0?22:36,null,true);
+            if(p.reload>0)TacticalUI.Bar(new Rect(1295,863,260,3),1-p.reload/1.5f,TacticalUI.Coral);
+            TacticalUI.Text(new Rect(440,850,720,25),"WASD  MOVE     SHIFT  WALK     R  RELOAD     ESC  PAUSE",12,TacticalUI.Muted,false,TextAnchor.MiddleCenter);
             if(Mode==PracticeMode.Live&&!paused)
             {
-                GUI.color=hitFlash>0?Color.red:Color.white;
-                GUI.DrawTexture(new Rect(788,449,8,2),Texture2D.whiteTexture);GUI.DrawTexture(new Rect(804,449,8,2),Texture2D.whiteTexture);
-                GUI.DrawTexture(new Rect(799,438,2,8),Texture2D.whiteTexture);GUI.DrawTexture(new Rect(799,454,2,8),Texture2D.whiteTexture);GUI.color=Color.white;
-                if(damageFlash>0){GUI.color=new Color(1,0,0,.2f);GUI.DrawTexture(new Rect(0,0,1600,900),Texture2D.whiteTexture);GUI.color=Color.white;}
-                GUI.Label(new Rect(530,850,650,30),"WASD move  /  SHIFT walk  /  R reload  /  ESC pause",small);return;
+                Color c=hitFlash>0?TacticalUI.Coral:TacticalUI.Mint;
+                TacticalUI.Fill(new Rect(788,449,7,2),c);TacticalUI.Fill(new Rect(805,449,7,2),c);
+                TacticalUI.Fill(new Rect(799,438,2,7),c);TacticalUI.Fill(new Rect(799,455,2,7),c);
+                if(damageFlash>0){TacticalUI.Fill(new Rect(0,0,1600,10),TacticalUI.Coral);TacticalUI.Fill(new Rect(0,890,1600,10),TacticalUI.Coral);}
+                return;
             }
-            GUILayout.BeginArea(new Rect(510,210,580,550),GUI.skin.box);
-            GUILayout.Label(Mode==PracticeMode.Review?"REVISIT THE DECISION":paused?"PAUSED":"ATTEMPT COMPLETE",heading);
-            if(Mode==PracticeMode.Review)
+            if(Mode==PracticeMode.Review){ReviewGUI();return;}
+            TacticalUI.Fill(new Rect(0,85,1600,700),new Color(.02f,.04f,.06f,.55f));
+            TacticalUI.Card(new Rect(470,180,660,560));
+            TacticalUI.Fill(new Rect(470,180,660,4),TacticalUI.Coral);
+            TacticalUI.Label(505,205,paused?"SESSION CONTROL":"POST-ROUND ANALYSIS");
+            TacticalUI.Text(new Rect(505,240,590,65),paused?"TAKE A BREATH.":b.health<=0?"DUEL WON.":p.health<=0?"TRY ANOTHER ANGLE.":"ATTEMPT COMPLETE.",36,null,true);
+            if(paused)
             {
-                GUILayout.Label("Drag to a moment before elimination.",small);
-                int i=Mathf.RoundToInt(GUILayout.HorizontalSlider(reviewIndex,0,review.Count-1));
-                if(i!=reviewIndex){reviewIndex=i;reviewClock=review[i].time;reviewPlaying=false;Restore(review[i]);}
-                if(GUILayout.Button(reviewPlaying?"Pause replay":"Play replay",GUILayout.Height(42)))
-                {if(reviewIndex==review.Count-1){reviewIndex=0;reviewClock=review[0].time;}reviewPlaying=!reviewPlaying;}
-                GUI.enabled=p.health>0&&b.health>0;
-                if(GUILayout.Button("TAKE CONTROL HERE",GUILayout.Height(52)))TakeOver();GUI.enabled=true;
-                GUILayout.Label("Replay restores aim, ammo, health and bot memory. Shot effects are not replayed.",small);
-            }
-            else if(paused)
-            {
-                if(GUILayout.Button("Resume",GUILayout.Height(45))){paused=false;Lock(true);}
-                if(GUILayout.Button("End attempt",GUILayout.Height(45))){paused=false;EndAttempt();}
+                TacticalUI.Text(new Rect(505,315,590,40),"Your scenario is paused. Resume when you are ready.",16,TacticalUI.Muted);
+                if(TacticalUI.Button(new Rect(505,385,590,55),"RESUME PRACTICE",true)){paused=false;Lock(true);}
+                if(TacticalUI.Button(new Rect(505,452,590,48),"END ATTEMPT")){paused=false;EndAttempt();}
             }
             else
             {
-                GUILayout.Label(outcome,heading);
-                if(previous!="")GUILayout.Label("Previous: "+previous,small);
-                if(GUILayout.Button("Watch replay",GUILayout.Height(48)))OpenReview();
+                TacticalUI.Card(new Rect(505,320,285,88));TacticalUI.Card(new Rect(810,320,285,88));
+                TacticalUI.Label(525,330,"TIME ELAPSED");TacticalUI.Text(new Rect(525,351,245,45),elapsed.ToString("0.0")+" SEC",29,null,true);
+                TacticalUI.Label(830,330,"HEALTH REMAINING");TacticalUI.Text(new Rect(830,351,245,45),p.health.ToString("0")+" HP",29,TacticalUI.Mint,true);
+                TacticalUI.Text(new Rect(505,419,590,65),previous!=""?"Previous attempt\n"+previous:"Every decision is another chance. Review this attempt and try a new approach.",14,TacticalUI.Muted);
+                if(TacticalUI.Button(new Rect(505,502,590,55),"REVIEW THIS ATTEMPT  >",true))OpenReview();
             }
-            if(GUILayout.Button("Retry same scenario",GUILayout.Height(44))){previous=outcome;StartAttempt();}
-            if(GUILayout.Button("Edit scenario / placement",GUILayout.Height(44))){ResetActors();ShowSetup();}
-            GUILayout.EndArea();
+            if(TacticalUI.Button(new Rect(505,583,590,48),"RETRY SAME SCENARIO")){previous=outcome;StartAttempt();}
+            if(TacticalUI.Button(new Rect(505,643,590,48),"BACK TO SCENARIO BUILDER")){ResetActors();ShowSetup();}
+        }
+        void ReviewGUI()
+        {
+            // Bottom-mounted controls keep the duel visible while scrubbing.
+            TacticalUI.Card(new Rect(350,630,900,195));
+            TacticalUI.Fill(new Rect(350,630,900,3),TacticalUI.Mint);
+            TacticalUI.Label(375,647,"REWIND. REPOSITION. REPLAY.");
+            TacticalUI.Text(new Rect(970,645,255,25),review[reviewIndex].time.ToString("0.0")+" / "+review[review.Count-1].time.ToString("0.0")+" SEC",14,null,true,TextAnchor.MiddleRight);
+            int i=Mathf.RoundToInt(TacticalUI.Slider(new Rect(375,684,850,24),reviewIndex,0,Mathf.Max(1,review.Count-1)));
+            i=Mathf.Clamp(i,0,review.Count-1);
+            if(i!=reviewIndex){reviewIndex=i;reviewClock=review[i].time;reviewPlaying=false;Restore(review[i]);}
+            if(TacticalUI.Button(new Rect(375,726,185,47),reviewPlaying?"PAUSE":"PLAY"))
+            {if(reviewIndex==review.Count-1){reviewIndex=0;reviewClock=review[0].time;}reviewPlaying=!reviewPlaying;}
+            GUI.enabled=p.health>0&&b.health>0;
+            if(TacticalUI.Button(new Rect(575,726,400,47),"TAKE CONTROL AT THIS MOMENT",true))TakeOver();GUI.enabled=true;
+            if(TacticalUI.Button(new Rect(990,726,235,47),"SCENARIO SETUP")){ResetActors();ShowSetup();}
+            TacticalUI.Text(new Rect(375,785,850,25),p.health<=0||b.health<=0?"Move the timeline to before elimination to take control.":"State replay: position, aim, health and ammo. Shot effects are not replayed.",12,TacticalUI.Muted);
         }
         void SetupGUI()
         {
-            GUILayout.BeginArea(new Rect(15,15,365,865),GUI.skin.box);
-            GUILayout.Label("SECOND CHANCE",heading);GUILayout.Label("PIAZZA / SCENARIO BUILDER",small);GUILayout.Space(15);
-            GUILayout.Label("1. Place characters on the map",small);
-            placement=GUILayout.SelectionGrid(placement,new[]{"Place PLAYER","Place OPPONENT"},1,GUILayout.Height(70));
-            GUILayout.Label("Player facing: "+scenario.playerYaw.ToString("0")+"°",small);
-            float py=GUILayout.HorizontalSlider(scenario.playerYaw,0,359);
-            GUILayout.Label("Opponent facing: "+scenario.opponentYaw.ToString("0")+"°",small);
-            float by=GUILayout.HorizontalSlider(scenario.opponentYaw,0,359);
+            TacticalUI.Fill(new Rect(0,0,1600,80),TacticalUI.Ink);
+            TacticalUI.Fill(new Rect(25,22,4,37),TacticalUI.Coral);
+            TacticalUI.Text(new Rect(42,16,430,38),"SECOND CHANCE",27,null,true);
+            TacticalUI.Text(new Rect(43,53,430,18),"TACTICAL PRACTICE  /  BUILD YOUR NEXT MOVE",10,TacticalUI.Muted,true);
+            TacticalUI.Text(new Rect(1175,20,390,40),"PIAZZA  //  SCENARIO 01",17,null,true,TextAnchor.MiddleRight);
+            TacticalUI.Fill(new Rect(0,80,425,820),TacticalUI.Ink);
+            TacticalUI.Fill(new Rect(424,80,1,820),TacticalUI.Line);
+            TacticalUI.Label(25,98,"01  /  DEPLOYMENT");
+            if(TacticalUI.Button(new Rect(25,132,180,45),"PLAYER",false,placement==0))placement=0;
+            if(TacticalUI.Button(new Rect(215,132,185,45),"OPPONENT",false,placement==1))placement=1;
+            TacticalUI.Text(new Rect(25,186,375,35),"Select a character, then click clear paving on the map.",13,TacticalUI.Muted);
+            TacticalUI.Text(new Rect(25,231,375,23),"PLAYER FACING                         "+scenario.playerYaw.ToString("0")+"°",12,null,true);
+            float py=TacticalUI.Slider(new Rect(25,260,375,22),scenario.playerYaw,0,359);
+            TacticalUI.Text(new Rect(25,293,375,23),"OPPONENT FACING                     "+scenario.opponentYaw.ToString("0")+"°",12,null,true);
+            float by=TacticalUI.Slider(new Rect(25,322,375,22),scenario.opponentYaw,0,359);
             if(py!=scenario.playerYaw||by!=scenario.opponentYaw){scenario.playerYaw=py;scenario.opponentYaw=by;ResetActors();}
-            GUILayout.Space(12);GUILayout.Label("2. Opponent style",small);
-            scenario.style=(OpponentStyle)GUILayout.SelectionGrid((int)scenario.style,new[]{"Aggressive","Balanced","Defensive"},1,GUILayout.Height(95));
-            GUILayout.Label("Reaction: "+scenario.reactionSeconds.ToString("0.00")+"s",small);
-            scenario.reactionSeconds=GUILayout.HorizontalSlider(scenario.reactionSeconds,.15f,1.5f);
-            GUILayout.Label("Accuracy: "+Mathf.RoundToInt(scenario.accuracy*100)+"%",small);
-            scenario.accuracy=GUILayout.HorizontalSlider(scenario.accuracy,.1f,1);
-            GUILayout.Space(15);
-            if(GUILayout.Button("START PRACTICE",GUILayout.Height(55)))StartAttempt();
-            if(GUILayout.Button("Save scenario",GUILayout.Height(35)))
-            {try{File.WriteAllText(savePath,JsonUtility.ToJson(scenario,true));notice="Saved locally. Load it after restarting Unity.";}catch(Exception e){notice=e.Message;}}
-            if(GUILayout.Button("Load saved scenario",GUILayout.Height(35)))
-            {try{if(File.Exists(savePath)){var loaded=JsonUtility.FromJson<PracticeScenario>(File.ReadAllText(savePath));if(loaded!=null){scenario=loaded;ResetActors();notice="Scenario loaded.";}}else notice="No scenario saved yet.";}catch(Exception e){notice=e.Message;}}
-            GUILayout.Space(12);GUILayout.Label(notice,small);
-            GUILayout.Space(12);GUILayout.Label(externalBot==null?"Demo opponent enabled. Attach your friend's adapter to replace it.":"External bot connected.",small);
-            GUILayout.EndArea();
-            Marker(scenario.playerPosition,"PLAYER",new Color(.3f,.9f,.9f));Marker(scenario.opponentPosition,"OPPONENT",new Color(1,.35f,.3f));
+            TacticalUI.Fill(new Rect(25,361,375,1),TacticalUI.Line);TacticalUI.Label(25,376,"02  /  OPPONENT PROFILE");
+            string[] names={"AGGRESSIVE","BALANCED","DEFENSIVE"};
+            for(int n=0;n<3;n++)if(TacticalUI.Button(new Rect(25+n*128,409,119,42),names[n],false,(int)scenario.style==n))scenario.style=(OpponentStyle)n;
+            string description=scenario.style==OpponentStyle.Aggressive?"Hunts across the courtyard. Pushes an opening.":scenario.style==OpponentStyle.Defensive?"Protects its starting area. Repositions near cover.":"Alternates patrols and holding. Pushes an advantage.";
+            TacticalUI.Text(new Rect(25,463,375,40),description,14,TacticalUI.Muted);
+            TacticalUI.Text(new Rect(25,517,375,25),"REACTION TIME                             "+scenario.reactionSeconds.ToString("0.00")+"s",12,null,true);
+            scenario.reactionSeconds=TacticalUI.Slider(new Rect(25,548,375,22),scenario.reactionSeconds,.15f,1.5f);
+            TacticalUI.Text(new Rect(25,583,375,25),"ACCURACY                                       "+Mathf.RoundToInt(scenario.accuracy*100)+"%",12,null,true);
+            scenario.accuracy=TacticalUI.Slider(new Rect(25,614,375,22),scenario.accuracy,.1f,1);
+            TacticalUI.Fill(new Rect(25,658,375,1),TacticalUI.Line);
+            if(TacticalUI.Button(new Rect(25,682,180,39),"SAVE SETUP"))
+            {try{File.WriteAllText(savePath,JsonUtility.ToJson(scenario,true));notice="Scenario saved. Ready for your next session.";}catch(Exception e){notice=e.Message;}}
+            if(TacticalUI.Button(new Rect(215,682,185,39),"LOAD SETUP"))
+            {try{if(File.Exists(savePath)){var loaded=JsonUtility.FromJson<PracticeScenario>(File.ReadAllText(savePath));if(loaded!=null){scenario=loaded;ResetActors();notice="Saved scenario loaded.";}}else notice="No saved scenario yet.";}catch(Exception e){notice=e.Message;}}
+            TacticalUI.Text(new Rect(25,733,375,52),notice,12,TacticalUI.Muted);
+            if(TacticalUI.Button(new Rect(25,798,375,59),"START PRACTICE  >",true))StartAttempt();
+            TacticalUI.Text(new Rect(25,866,375,22),externalBot==null?"LOCAL SIMULATION  /  DEMO OPPONENT":"EXTERNAL BOT CONNECTED",10,TacticalUI.Muted,true);
+            TacticalUI.Card(new Rect(455,100,410,64));TacticalUI.Label(475,108,"TACTICAL OVERVIEW");
+            TacticalUI.Text(new Rect(475,134,370,22),placement==0?"Click the map to deploy your player.":"Click the map to deploy the opponent.",14);
+            TacticalUI.Text(new Rect(1140,848,420,30),"ONE MOMENT. ANOTHER CHANCE.",15,TacticalUI.White,true,TextAnchor.MiddleRight);
+            Marker(scenario.playerPosition,"YOU",TacticalUI.Mint);
+            Marker(scenario.opponentPosition,"OPPONENT",TacticalUI.Coral);
         }
         void Marker(Vector3 pos,string label,Color color)
         {
             Vector3 s=overhead.WorldToViewportPoint(pos+Vector3.up*2);
-            GUI.color=color;GUI.Label(new Rect(s.x*1600-55,(1-s.y)*900-15,140,30),label,small);GUI.color=Color.white;
+            float x=s.x*1600,y=(1-s.y)*900;
+            TacticalUI.Fill(new Rect(x-5,y-5,10,10),color);
+            TacticalUI.Fill(new Rect(x-60,y-38,120,26),TacticalUI.Ink);
+            TacticalUI.Text(new Rect(x-58,y-38,116,26),label,11,color,true,TextAnchor.MiddleCenter);
+            float yaw=label=="YOU"?scenario.playerYaw:scenario.opponentYaw;
+            Vector2 dir=new Vector2(Mathf.Sin(yaw*Mathf.Deg2Rad),-Mathf.Cos(yaw*Mathf.Deg2Rad));
+            for(int n=1;n<5;n++)TacticalUI.Fill(new Rect(x+dir.x*n*6-1,y+dir.y*n*6-1,3,3),color);
         }
     }
 }
