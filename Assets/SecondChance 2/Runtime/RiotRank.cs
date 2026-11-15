@@ -13,11 +13,13 @@ namespace SecondChance
         public int rank;
         public float reaction,accuracy,headshot,fireInterval,turnSpeed,hearing,abilityCooldown;
         public bool rushes,usesCover,strafes,preaims,flash,wall,ult;
+        public int reads; // times a player habit must show before the bot acts on it (PlayerRead)
         public string Name=>Names[rank];
-        public static RankProfile For(int rank)
+        // edge: sparring pressure in rank steps (PlayerRead.Edge). It moves the mechanics, never the habits.
+        public static RankProfile For(int rank,float edge=0)
         {
-            rank=Mathf.Clamp(rank,0,Names.Length-1);float t=rank/(Names.Length-1f);
-            return new RankProfile{rank=rank,
+            rank=Mathf.Clamp(rank,0,Names.Length-1);float t=Mathf.Clamp01((rank+edge)/(Names.Length-1f));
+            return new RankProfile{rank=rank,reads=rank<=1?3:rank<=3?2:1, // Iron/Bronze need it three times, Silver/Gold twice, Platinum+ once
                 reaction=Mathf.Lerp(.75f,.17f,t),accuracy=Mathf.Lerp(.22f,.95f,t),headshot=Mathf.Lerp(.03f,.45f,t),
                 fireInterval=Mathf.Lerp(.5f,.22f,t),turnSpeed=Mathf.Lerp(170f,450f,t),hearing=Mathf.Lerp(6f,18f,t),
                 abilityCooldown=Mathf.Lerp(11f,2.5f,t),

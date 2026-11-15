@@ -45,6 +45,8 @@ namespace SecondChance
         public List<AbilityFx> abilityFx;
         public float botAbilityTimer;
         public float strafeTimer, strafeDir;
+        public bool seen;      // bot had eyes on the player this frame (PlayerRead learns from it)
+        public bool readSpent; // this attempt already confirmed or refuted the bot's read of the player
     }
     [Serializable] public class PracticeScenario
     {
@@ -53,6 +55,8 @@ namespace SecondChance
         public float playerYaw, opponentYaw = 180;
         public int rank = 3;            // 0 Iron ... 8 Radiant; sets every bot skill (RankProfile)
         public string riotId = "";      // optional Riot ID used to look the rank up
+        public bool adaptive = true;    // off: the bot ignores what it has learned and plays every attempt alike
+        public PlayerRead read = new PlayerRead(); // what the bot has learned about the player across attempts
         [NonSerialized] public int startingHealth = 150; // fixed for everyone; not taken from old scene/save values
     }
     // Your friend's adapter can subclass this. Capture/Restore must include its
@@ -69,7 +73,7 @@ namespace SecondChance
         public PracticeBotDriver externalBot;
         public PracticeScenario scenario = new PracticeScenario();
         public PracticeMode Mode { get; private set; } = PracticeMode.Setup;
-        public RankProfile Bot => RankProfile.For(scenario.rank);
+        public RankProfile Bot => RankProfile.For(scenario.rank,scenario.adaptive?scenario.read.Edge:0);
         public Vector3 PlayerPosition => p.position;
         public Vector3 OpponentPosition => b.position;
         public float OpponentHealth => b.health;
@@ -122,6 +126,9 @@ namespace SecondChance
         bool playerFireHeld;  // Blaze bends only while FIRE stays held
         float botAbilityTimer;
         float strafeTimer,strafeDir=1; // bot counter-strafe rhythm
+        bool sawPlayer,readSpent;      // adaptive read: see PracticeSnapshot.seen / readSpent
+        string readNote;float readNoteTime; // last adaptive decision, held on the HUD for a moment
+        readonly List<KeyValuePair<float,string>> trace=new List<KeyValuePair<float,string>>(); // decision changes of the last attempt
         bool rankLookup; string rankStatus="Enter a Riot ID to match the bot to that rank, or pick one.";
         void Awake()
         {
@@ -291,7 +298,7 @@ namespace SecondChance
             p=Fresh(scenario.playerPosition,scenario.playerYaw); b=Fresh(scenario.opponentPosition,scenario.opponentYaw);
             fx.Clear();foreach(int id in new List<int>(views.Keys))Drop(id);botAbilityTimer=0;armed=0;strafeTimer=0;strafeDir=1;
             lastKnown=b.position;memory=0;reaction=0;rng=12345;Decision="Holding angle";elapsed=0;
-            patrolGoal=b.position;patrolTimer=0;previousBotHealth=b.health;route.Clear();routeAge=0;
+            patrolGoal=b.position;patrolTimer=0;previousBotHealth=b.health;route.Clear();routeAge=0;sawPlayer=readSpent=false;
             ApplyTransforms();if(externalBot!=null)externalBot.ResetBot(scenario);
         }
         void Lock(bool value){Cursor.lockState=value?CursorLockMode.Locked:CursorLockMode.None;Cursor.visible=!value;}
@@ -317,7 +324,7 @@ namespace SecondChance
                 {
                     reviewClock+=dt;
                     while(reviewIndex+1<review.Count&&review[reviewIndex+1].time<=reviewClock)reviewIndex++;
-                    Restore(review[reviewIndex]);if(reviewIndex==review.Count-1)reviewPlaying=false;
+                    Restore(review[reviewIndex]);NoteRead();if(reviewIndex==review.Count-1)reviewPlaying=false;
                 }
                 PoseGun();return;
             }
@@ -328,13 +335,15 @@ namespace SecondChance
             if(p.health>0&&b.health>0)
             {
                 if(externalBot!=null)externalBot.TickBot(this,dt);else BuiltInBot(dt);
-                TickAbilities(dt);
+                TickAbilities(dt);NoteRead();
             }
             if(Revive(ref p)|Revive(ref b)){ApplyTransforms();route.Clear();}
             p.position=playerRoot.position;b.position=botRoot.position;
             frames.Add(Capture());PoseGun();
             if(p.health<=0||b.health<=0||elapsed>=60)EndAttempt();
         }
+        // Adaptive decisions all start with READ; some last a single frame, so the HUD holds the latest one briefly.
+        void NoteRead(){if(Decision.StartsWith("READ",StringComparison.Ordinal)){readNote=Decision;readNoteTime=Time.time;}}
         void TickTimers(ref ActorSnapshot a,float dt)
         {
             a.shotCooldown=Mathf.Max(0,a.shotCooldown-dt);
@@ -470,14 +479,29 @@ namespace SecondChance
         {
             routeAge+=dt;patrolTimer-=dt;botAbilityTimer-=dt;strafeTimer-=dt;
             var k=Bot;
-            bool seen=CanSeePlayer();
+            bool seen=CanSeePlayer();sawPlayer=seen;
             bool hurt=b.health<previousBotHealth;previousBotHealth=b.health;
             Vector3 home=scenario.opponentPosition;
+            // Adaptive read: earlier attempts say which way this player comes, where the fight starts and when.
+            // It steers the bot until this attempt confirms or refutes it. `note` puts what the read did into
+            // the decision trace.
+            string note=null;PlayerRead read=scenario.read;PlayerRead.Attempt exp=default;int expN=0;
+            bool expect=scenario.adaptive&&!readSpent&&read.Approach(k.reads,out exp,out expN);
+            if(expect&&(seen||hurt))
+            {
+                // Showing up at the expected spot, or in the waiting crosshair, costs the player half the bot's reaction time.
+                bool hit=PlayerRead.Gap(p.position,exp.spot)<PlayerRead.Near||seen&&Vector3.Angle(botRoot.forward,p.position-b.position)<15f;
+                if(hit)reaction=Mathf.Max(reaction,k.reaction*.5f);
+                note=hit?"READ hit / you showed where expected":"READ miss / you came a different way";
+            }
+            else if(expect&&elapsed>exp.time+(exp.moving?8f:25f))note="READ miss / you never showed, hunting";
+            if(seen||hurt||note!=null){readSpent=true;expect=false;}
             // Hearing: running footsteps; higher ranks pick them up from further. Walking, crouching and ADS-walking are silent.
             Vector3 pv=pc.velocity;pv.y=0;
             if(!seen&&pc.isGrounded&&pv.magnitude>3.6f&&Vector3.Distance(b.position,p.position)<k.hearing){lastKnown=p.position;memory=Mathf.Max(memory,2.5f);}
             if(hurt){patrolTimer=0;Decision="Taking fire / repositioning";}
             if(b.blind>0){reaction=0;Decision="Flashed / backing off blind";MoveOpponent(-botRoot.forward,2f,dt);}
+            else if(SeesPlayerFlash(k,out Vector3 orb)){Decision="READ / turning away from your Curveball";AimOpponent(2*b.position-orb,k.turnSpeed*2,dt);}
             else if(seen)
             {
                 lastKnown=p.position;memory=6;reaction+=dt;
@@ -501,8 +525,12 @@ namespace SecondChance
                     else if(k.strafes){Decision=k.Name+" / strafe and trade";Strafe(dt,2.4f);}
                     else Decision=k.Name+" / planted, taking the fight";
                 }
-                // Tracking lags behind a moving target (less with higher accuracy), so wide strafes are harder to hit.
-                Vector3 aimAt=p.position-pv*((1-k.accuracy)*.3f);
+                // Tracking lags behind a moving target (less with higher accuracy), so wide strafes are harder to hit...
+                float lag=(1-k.accuracy)*.3f;
+                // ...unless the player always strafes the same way under fire: that side is already being led.
+                int dodge=scenario.adaptive?read.Dodge(k.reads,out _):0;
+                if(dodge!=0&&Vector3.Dot(pv,playerRoot.right)*dodge>1f){lag*=.25f;note??="READ / leading your usual "+(dodge>0?"right":"left")+" strafe";}
+                Vector3 aimAt=p.position-pv*lag;
                 AimOpponent(aimAt,k.turnSpeed,dt);
                 Vector3 flat=aimAt-b.position;flat.y=0;
                 bool onTarget=Vector3.Angle(botRoot.forward,flat)<6f; // no shooting before the crosshair is on you
@@ -516,30 +544,52 @@ namespace SecondChance
             {
                 // Reaction drains instead of resetting, so briefly losing sight (a strafe behind a pillar) keeps the bot ready.
                 reaction=Mathf.Max(0,reaction-dt*2);memory=Mathf.Max(0,memory-dt);
+                // Read, player waits at one spot: make it the last-known position, so the usual clearing kit
+                // (pre-aim, flash before the peek, molly, Run It Back) is spent there instead of walking in dry.
+                bool lane=expect&&exp.moving,camp=expect&&!exp.moving;
+                if(camp&&memory<=0){lastKnown=exp.spot;memory=3f;}
+                camp=camp&&lastKnown==exp.spot; // false while chasing a real noise instead
                 // Pre-aim the last known spot whenever there is a clear line to it.
                 Vector3 eye=b.position+Vector3.up*1.5f;
                 bool preaim=k.preaims&&memory>0&&!Solid(eye,lastKnown+Vector3.up*1.2f)&&!WallBlocks(eye,lastKnown);
                 if(b.ultActive&&memory>0){Decision="Run It Back / pushing with no risk";Navigate(lastKnown,3.7f,dt,!preaim);}
                 else if(memory>0&&Vector3.Distance(b.position,lastKnown)>1.1f)
                 {
-                    Decision=hurt?"Shot from out of view / turning to the shooter":"Investigate noise / last known position";
+                    Decision=hurt?"Shot from out of view / turning to the shooter":camp?"READ / clearing the spot you hold ("+expN+" of "+read.Contacts+")":"Investigate noise / last known position";
                     Navigate(lastKnown,k.rushes?3.7f:2.5f,dt,!preaim);
                 }
                 else
                 {
                     if(memory>0)memory=0; // reached the spot and nobody is there
-                    if(patrolTimer<=0||Vector3.Distance(b.position,patrolGoal)<.8f)
-                        PickPatrol(k.rushes?Vector3.zero:home,k.rushes?19f:9f,false);
-                    Decision=k.rushes?k.Name+" / wandering the courtyard":k.Name+" / alternate patrol and hold";
-                    // Better players pause to hold angles; low ranks keep wandering.
-                    if(k.rushes||Mathf.FloorToInt(elapsed/3f)%3!=2)
-                        Navigate(patrolGoal,k.rushes?3.4f:2.2f,dt);
-                    else AimOpponent(b.position+Quaternion.Euler(0,Mathf.Sin(elapsed)*55,0)*Vector3.forward,90,dt);
+                    if(camp){readSpent=true;note="READ miss / your usual spot is empty";}
+                    if(lane&&!k.rushes)
+                    {
+                        // Read, player pushes one lane: walk until it is in view, plant, keep the crosshair on it.
+                        if(patrolTimer<=0){patrolGoal=HoldFor(exp.spot);patrolTimer=4f;}
+                        Decision="READ / holding the lane you push ("+expN+" of "+read.Contacts+")";
+                        if(Vector3.Distance(b.position,patrolGoal)>.8f)Navigate(patrolGoal,2.2f,dt,false);
+                        AimOpponent(exp.spot,260,dt);
+                        // Their timing is known too: burn the lane a second before they usually arrive.
+                        if(b.mollies>0&&botAbilityTimer<=0&&elapsed>2f&&Mathf.Abs(elapsed-exp.time+1f)<.5f&&PlayerRead.Gap(b.position,exp.spot)<16f&&Lob(eye,exp.spot,out Vector3 vel))
+                        {Fireball(1,eye,vel);botAbilityTimer=k.abilityCooldown;note="READ / burning your lane on your timing";}
+                    }
+                    else
+                    {
+                        // A rusher with the same read just runs to where the player shows up.
+                        if(patrolTimer<=0||Vector3.Distance(b.position,patrolGoal)<.8f)
+                            PickPatrol(lane?exp.spot:k.rushes?Vector3.zero:home,lane?5f:k.rushes?19f:9f,false);
+                        Decision=lane?"READ / running to where you show up":k.rushes?k.Name+" / wandering the courtyard":k.Name+" / alternate patrol and hold";
+                        // Better players pause to hold angles; low ranks keep wandering.
+                        if(k.rushes||Mathf.FloorToInt(elapsed/3f)%3!=2)
+                            Navigate(patrolGoal,k.rushes?3.4f:2.2f,dt);
+                        else AimOpponent(b.position+Quaternion.Euler(0,Mathf.Sin(elapsed)*55,0)*Vector3.forward,90,dt);
+                    }
                 }
                 if(preaim)AimOpponent(lastKnown,hurt?600:260,dt);
                 // Reload in the lull, not mid-fight.
                 if(k.usesCover&&b.reload<=0&&b.ammo<12&&memory<2)b.reload=1.5f;
             }
+            if(note!=null)Decision=note;
             if(b.blind<=0)BotAbilities(seen);
             // Like a real player, look away from your own curveball until it pops.
             foreach(var f in fx)if(f.owner==1&&f.kind==FxKind.Flash&&!f.done){AimOpponent(2*b.position-f.pos,1e6f,dt);break;}
@@ -550,6 +600,28 @@ namespace SecondChance
                 MoveOpponent(away.sqrMagnitude>.01f?away.normalized:-botRoot.forward,3.5f,dt);Decision="Escaping fire";break;
             }
             if(b.ammo<=0&&b.reload<=0)b.reload=1.5f;
+        }
+        // Learned, not innate: once the player's Curveball has landed often enough, the bot turns from the next
+        // one. It reacts only to an orb in its line of sight, so a flash curved in late still lands.
+        bool SeesPlayerFlash(RankProfile k,out Vector3 orb)
+        {
+            orb=default;
+            if(!scenario.adaptive||scenario.read.Flashed<k.reads)return false;
+            Vector3 eye=b.position+Vector3.up*1.6f;
+            foreach(var f in fx)
+                if(f.owner==0&&f.kind==FxKind.Flash&&!f.done&&f.age>k.reaction*.5f&&!Solid(eye,f.pos)&&!WallBlocks(eye,f.pos)){orb=f.pos;return true;}
+            return false;
+        }
+        // First point on the way to `spot` that already sees it from inside gun range: walk that far, then plant.
+        Vector3 HoldFor(Vector3 spot)
+        {
+            Vector3 at=b.position;
+            foreach(Vector3 q in navigation.Route(b.position,spot))
+            {
+                if(Vector3.Distance(at,spot)<24f&&!Solid(at+Vector3.up*1.5f,spot+Vector3.up*1.2f))break;
+                at=q;
+            }
+            return at;
         }
         // Counter-strafe rhythm: shuffle sideways, then plant for the last quarter-second so shots land.
         void Strafe(float dt,float speed)
@@ -950,11 +1022,11 @@ namespace SecondChance
             effects.Add(g);Destroy(g,.07f);effects.RemoveAll(x=>x==null);
         }
         void ClearEffects(){foreach(var e in effects)if(e!=null)Destroy(e);effects.Clear();}
-        PracticeSnapshot Capture()=>new PracticeSnapshot{time=elapsed,player=p,opponent=b,lastKnown=lastKnown,memory=memory,reaction=reaction,rng=rng,decision=Decision,patrolGoal=patrolGoal,patrolTimer=patrolTimer,previousBotHealth=previousBotHealth,externalState=externalBot!=null?externalBot.CaptureBotState():"",abilityFx=Copy(fx),botAbilityTimer=botAbilityTimer,strafeTimer=strafeTimer,strafeDir=strafeDir};
+        PracticeSnapshot Capture()=>new PracticeSnapshot{time=elapsed,player=p,opponent=b,lastKnown=lastKnown,memory=memory,reaction=reaction,rng=rng,decision=Decision,patrolGoal=patrolGoal,patrolTimer=patrolTimer,previousBotHealth=previousBotHealth,externalState=externalBot!=null?externalBot.CaptureBotState():"",abilityFx=Copy(fx),botAbilityTimer=botAbilityTimer,strafeTimer=strafeTimer,strafeDir=strafeDir,seen=sawPlayer,readSpent=readSpent};
         void Restore(PracticeSnapshot f)
         {
             p=f.player;b=f.opponent;lastKnown=f.lastKnown;memory=f.memory;reaction=f.reaction;rng=f.rng;Decision=f.decision;elapsed=f.time;patrolGoal=f.patrolGoal;patrolTimer=f.patrolTimer;previousBotHealth=f.previousBotHealth;route.Clear();routeAge=0;ApplyTransforms();
-            fx.Clear();if(f.abilityFx!=null)fx.AddRange(Copy(f.abilityFx));botAbilityTimer=f.botAbilityTimer;strafeTimer=f.strafeTimer;strafeDir=f.strafeDir==0?1:f.strafeDir;armed=0;rifle.gameObject.SetActive(true);
+            fx.Clear();if(f.abilityFx!=null)fx.AddRange(Copy(f.abilityFx));botAbilityTimer=f.botAbilityTimer;strafeTimer=f.strafeTimer;strafeDir=f.strafeDir==0?1:f.strafeDir;sawPlayer=f.seen;readSpent=f.readSpent;armed=0;rifle.gameObject.SetActive(true);
             if(externalBot!=null)externalBot.RestoreBotState(f.externalState);
         }
         void ApplyTransforms()
@@ -966,6 +1038,19 @@ namespace SecondChance
         void EndAttempt()
         {
             Mode=PracticeMode.Results;Lock(false);outcome=(b.health<=0?"DUEL WON":p.health<=0?"DUEL LOST":"TIME LIMIT")+"  /  "+elapsed.ToString("0.0")+"s\nHealth remaining: "+p.health.ToString("0")+"   |   Enemy: "+b.health.ToString("0");
+            // The bot studies the attempt it just played; the next one (retry or replay takeover) faces what it learned.
+            scenario.read.Learn(frames,scenario.playerPosition,Bot.reads);
+            if(!scenario.adaptive)scenario.read.verdict=""; // nothing was waiting for them
+            trace.Clear();
+            for(int i=1;i<frames.Count;i++) // frame 0 is the pre-tick placeholder decision
+            {
+                var f=frames[i];int n=trace.Count;
+                if(n>0&&trace[n-1].Value==f.decision)continue;
+                // Flicker guard: a decision logged under 3s ago returns as a new line only if what replaced it lasted a second.
+                int was=trace.FindLastIndex(e=>e.Value==f.decision);
+                if(was>=0&&f.time-trace[was].Key<3f&&f.time-trace[n-1].Key<1f)continue;
+                trace.Add(new KeyValuePair<float,string>(f.time,f.decision));
+            }
         }
         void OpenReview()
         {
@@ -980,7 +1065,7 @@ namespace SecondChance
         {
             if(Mouse.current==null||!Mouse.current.leftButton.wasPressedThisFrame)return;
             Vector2 mouse=Mouse.current.position.ReadValue();Vector2 ui=new Vector2(mouse.x*1600f/Screen.width,(Screen.height-mouse.y)*900f/Screen.height);
-            if(ui.x<425||ui.y<80||new Rect(455,100,410,64).Contains(ui))return;
+            if(ui.x<425||ui.x>1140||ui.y<80||new Rect(455,100,410,64).Contains(ui))return; // side panels and cards are not map
             Ray ray=overhead.ScreenPointToRay(mouse);
             if(!Physics.Raycast(ray,out RaycastHit h,100,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore))return;
             if(h.normal.y<.9f||h.point.y>.15f){notice="Choose clear paving, not a roof or cover.";return;}
@@ -993,7 +1078,7 @@ namespace SecondChance
             Vector3 other=placement==0?scenario.opponentPosition:scenario.playerPosition;
             if(Vector3.Distance(point,other)<1.2f){notice="Leave space between characters.";return;}
             if(placement==0)scenario.playerPosition=point;else scenario.opponentPosition=point;
-            ResetActors();notice="Position updated. Select a facing direction, then start.";
+            scenario.read.ForgetApproach();ResetActors();notice="Position updated. Select a facing direction, then start.";
         }
         void OnApplicationFocus(bool focus){if(!focus&&Mode==PracticeMode.Live){paused=true;Lock(false);}}
         void OnDisable(){Lock(false);}
@@ -1033,6 +1118,11 @@ namespace SecondChance
             TacticalUI.Text(new Rect(1250,48,320,22),"1 VS 1  /  TRAINING",11,TacticalUI.Muted,false,TextAnchor.MiddleRight);
             TacticalUI.Card(new Rect(25,105,390,67));
             TacticalUI.Label(40,113,"OPPONENT INTENT");TacticalUI.Text(new Rect(40,137,360,27),Decision,13);
+            if(readNote!=null&&Time.time-readNoteTime<2.5f)
+            {
+                TacticalUI.Fill(new Rect(25,176,390,30),new Color(.035f,.065f,.09f,.86f));TacticalUI.Fill(new Rect(25,176,3,30),TacticalUI.Mint);
+                TacticalUI.Text(new Rect(40,176,370,30),readNote,12,TacticalUI.Mint,true);
+            }
             TacticalUI.Fill(new Rect(25,785,300,90),new Color(.035f,.065f,.09f,.85f));
             TacticalUI.Text(new Rect(45,791,100,62),p.health.ToString("0"),47,null,true);
             TacticalUI.Label(145,802,"HEALTH");TacticalUI.Text(new Rect(145,825,160,26),"READY FOR CONTACT",10,TacticalUI.Muted);
@@ -1082,9 +1172,32 @@ namespace SecondChance
                 TacticalUI.Label(830,330,"HEALTH REMAINING");TacticalUI.Text(new Rect(830,351,245,45),p.health.ToString("0")+" HP",29,TacticalUI.Mint,true);
                 TacticalUI.Text(new Rect(505,419,590,65),previous!=""?"Previous attempt\n"+previous:"Every decision is another chance. Review this attempt and try a new approach.",14,TacticalUI.Muted);
                 if(TacticalUI.Button(new Rect(505,502,590,55),"REVIEW THIS ATTEMPT  >",true))OpenReview();
+                ScoutCard(new Rect(1150,180,425,300),false);TraceCard(new Rect(1150,490,425,250),float.MaxValue);
             }
             if(TacticalUI.Button(new Rect(505,583,590,48),"RETRY SAME SCENARIO")){previous=outcome;StartAttempt();}
             if(TacticalUI.Button(new Rect(505,643,590,48),"BACK TO SCENARIO BUILDER")){ResetActors();ShowSetup();}
+        }
+        // What the bot has learned about the player, in the player's terms. Setup adds the on/off and forget controls.
+        void ScoutCard(Rect r,bool controls)
+        {
+            TacticalUI.Card(r);TacticalUI.Fill(new Rect(r.x,r.y,r.width,3),TacticalUI.Mint);
+            TacticalUI.Text(new Rect(r.x+15,r.y+10,r.width-30,22),"SCOUTING REPORT  /  WHAT THE BOT KNOWS ABOUT YOU",12,TacticalUI.Muted,true);
+            TacticalUI.Text(new Rect(r.x+15,r.y+38,r.width-30,r.height-(controls?100:48)),scenario.adaptive?scenario.read.Report(Bot.reads):"Adaptive read is off. The bot ignores what it has learned and plays every attempt the same way.",12,null,false,TextAnchor.UpperLeft);
+            if(!controls)return;
+            if(TacticalUI.Button(new Rect(r.x+15,r.yMax-52,190,38),scenario.adaptive?"ADAPTIVE: ON":"ADAPTIVE: OFF",false,scenario.adaptive))scenario.adaptive=!scenario.adaptive;
+            if(TacticalUI.Button(new Rect(r.x+215,r.yMax-52,r.width-230,38),"FORGET ME"))scenario.read=new PlayerRead();
+        }
+        // The bot's decision changes for the last attempt up to `upTo` seconds; adaptive ones (READ ...) in mint.
+        void TraceCard(Rect r,float upTo)
+        {
+            TacticalUI.Card(r);TacticalUI.Text(new Rect(r.x+15,r.y+10,r.width-30,22),"BEHAVIOR TRACE  /  WHAT IT DECIDED AND WHEN",12,TacticalUI.Muted,true);
+            int last=trace.FindLastIndex(e=>e.Key<=upTo),rows=Mathf.FloorToInt((r.height-44)/19);
+            for(int i=Mathf.Max(0,last-rows+1),y=0;i<=last;i++,y++)
+            {
+                bool read=trace[i].Value.StartsWith("READ",StringComparison.Ordinal);
+                TacticalUI.Text(new Rect(r.x+15,r.y+36+y*19,44,19),trace[i].Key.ToString("00.0"),11,TacticalUI.Muted,true);
+                TacticalUI.Text(new Rect(r.x+60,r.y+36+y*19,r.width-72,19),trace[i].Value,11,read?TacticalUI.Mint:TacticalUI.White,read);
+            }
         }
         void AbilitySlot(float x,string key,string name,string state,bool ready,int id)
         {
@@ -1098,6 +1211,7 @@ namespace SecondChance
             // Bottom-mounted controls keep the duel visible while scrubbing.
             TacticalUI.Card(new Rect(350,630,900,195));
             TacticalUI.Fill(new Rect(350,630,900,3),TacticalUI.Mint);
+            TraceCard(new Rect(1175,105,400,250),review[reviewIndex].time);
             TacticalUI.Label(375,647,"REWIND. REPOSITION. REPLAY.");
             TacticalUI.Text(new Rect(970,645,255,25),review[reviewIndex].time.ToString("0.0")+" / "+review[review.Count-1].time.ToString("0.0")+" SEC",14,null,true,TextAnchor.MiddleRight);
             int i=Mathf.RoundToInt(TacticalUI.Slider(new Rect(375,684,850,24),reviewIndex,0,Mathf.Max(1,review.Count-1)));
@@ -1159,6 +1273,14 @@ namespace SecondChance
             TacticalUI.Text(new Rect(1140,848,420,30),"ONE MOMENT. ANOTHER CHANCE.",15,TacticalUI.White,true,TextAnchor.MiddleRight);
             Marker(scenario.playerPosition,"YOU",TacticalUI.Mint);
             Marker(scenario.opponentPosition,"OPPONENT",TacticalUI.Coral);
+            ScoutCard(new Rect(1150,100,425,380),true);
+            if(scenario.adaptive&&scenario.read.Approach(Bot.reads,out PlayerRead.Attempt expected,out _))
+            {
+                // Where the read says the next fight starts.
+                Vector3 s=overhead.WorldToViewportPoint(expected.spot);float x=s.x*1600,y=(1-s.y)*900;
+                TacticalUI.Border(new Rect(x-9,y-9,18,18),TacticalUI.Coral);
+                TacticalUI.Text(new Rect(x-90,y+11,180,18),"BOT EXPECTS YOU HERE",10,TacticalUI.Coral,true,TextAnchor.MiddleCenter);
+            }
         }
         void Marker(Vector3 pos,string label,Color color)
         {

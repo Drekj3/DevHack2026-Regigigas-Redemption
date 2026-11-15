@@ -16,5 +16,11 @@ namespace SecondChance.Editor
             EditorSceneManager.SaveScene(scene,path);Selection.activeGameObject=root;
             Debug.Log("Practice scene saved. Press Play to build the courtyard and open scenario setup.");
         }
+        [MenuItem("Second Chance/Self-check Adaptive Read")]
+        public static void SelfCheck()
+        {
+            string fail=PlayerRead.SelfCheck();
+            if(fail==null)Debug.Log("Adaptive read self-check passed.");else Debug.LogError("Adaptive read self-check failed: "+fail);
+        }
     }
 }
